@@ -4,85 +4,75 @@ import (
 	"time"
 )
 
-// Production (Производство)
-type Production struct {
-	ProductionID      uint      `gorm:"primaryKey" json:"production_id"`
-	Products          []Product `gorm:"foreignKey:ProductionID" json:"products"` // 1-ко-многим с Товаром
-	EmployeeID        uint      `json:"employee_id"`
-	Employee          *Employee `gorm:"foreignKey:EmployeeID" json:"employee"` // 1-ко-многим с Сотрудником
-	DefectiveQuantity uint      `json:"defective_quantity"`
-	FactoryAddress    string    `json:"factory_address"`
-}
-
-// Product (Товар)
-type Product struct {
-	ProductID    uint       `gorm:"primaryKey" json:"product_id"`
-	ProductionID uint       `json:"production_id"`
-	DeliveryID   uint       `json:"delivery_id"`
-	Delivery     *Delivery  `gorm:"foreignKey:DeliveryID" json:"delivery"`         // многие-к-одному с Доставкой
-	Materials    []Material `gorm:"many2many:product_materials;" json:"materials"` // многие-ко-многим с Материалами
-	BatchNumber  uint       `json:"batch_number"`
-	ProductType  string     `json:"product_type"`
-	CostPrice    float64    `json:"cost_price"`
-	Name         string     `json:"product_name"`
-}
-
-// Material (Расходный материал)
-type Material struct {
-	MaterialID        uint      `gorm:"primaryKey" json:"material_id"`
-	Products          []Product `gorm:"many2many:product_materials;" json:"products"`
-	Price             float64   `json:"price"`
-	Type              string    `json:"type"`
-	Quantity          uint      `json:"quantity"`
-	StorageDepartment string    `json:"storage_department"`
-}
-
-// Employee (Сотрудник)
+// Обрати внимание - названия таблиц и полей ТОЧНО как в твоей БД
 type Employee struct {
-	EmployeeID  uint         `gorm:"primaryKey" json:"employee_id"`
-	Productions []Production `gorm:"foreignKey:EmployeeID" json:"productions"` // 1-ко-многим с Производством
-	Transport   *Transport   `gorm:"foreignKey:EmployeeID" json:"transport"`   // 1-к-1 с Транспортом
-	Deliveries  []Delivery   `gorm:"foreignKey:EmployeeID" json:"deliveries"`  // 1-ко-многим с Доставками
-	FullName    string       `json:"full_name"`
-	Position    string       `json:"position"`
-	Salary      float64      `json:"salary"`
-	PhoneNumber string       `json:"phone_number"`
+	EmployeeID  int     `gorm:"column:employee_id;primaryKey"`
+	FullName    string  `gorm:"column:full_name"`
+	Position    string  `gorm:"column:position"`
+	Salary      float64 `gorm:"column:salary"`
+	PhoneNumber string  `gorm:"column:phone_number"`
 }
 
-// Transport (Транспорт)
-type Transport struct {
-	TransportID     uint       `gorm:"primaryKey" json:"transport_id"`
-	EmployeeID      uint       `json:"employee_id"`                              // 1-к-1 с Сотрудником
-	Deliveries      []Delivery `gorm:"foreignKey:TransportID" json:"deliveries"` // 1-ко-многим с Доставками
-	Brand           string     `json:"brand"`
-	Year            uint       `json:"year"`
-	MaintenanceDate time.Time  `json:"maintenance_date"`
-	FuelType        string     `json:"fuel_type"`
-	IssueYear       uint       `json:"issue_year"`
+type Production struct {
+	ProductionID      int       `gorm:"column:production_id;primaryKey"`
+	ProductionDate    time.Time `gorm:"column:production_date"`
+	EmployeeID        int       `gorm:"column:employes_id"` // Вот тут ОШИБКА в твоей БД (employes вместо employees)
+	DefectiveQuantity int       `gorm:"column:defective_quantity"`
+	FactoryAddress    string    `gorm:"column:factory_address"`
 }
 
-// Delivery (Доставка)
 type Delivery struct {
-	DeliveryID   uint        `gorm:"primaryKey" json:"delivery_id"`
-	Products     []Product   `gorm:"foreignKey:DeliveryID" json:"products"` // 1-ко-многим с Товарами
-	TransportID  uint        `json:"transport_id"`
-	Transport    *Transport  `gorm:"foreignKey:TransportID" json:"transport"` // многие-к-одному с Транспортом
-	EmployeeID   uint        `json:"employee_id"`
-	Employee     *Employee   `gorm:"foreignKey:EmployeeID" json:"employee"` // многие-к-одному с Сотрудником
-	SalesPointID uint        `json:"sales_point_id"`
-	SalesPoint   *SalesPoint `gorm:"foreignKey:SalesPointID" json:"sales_point"` // многие-к-одному с Местом продажи
-	Amount       float64     `json:"amount"`
-	Address      string      `json:"address"`
-	Quantity     uint        `json:"quantity"`
-	DeliveryDate time.Time   `json:"delivery_date"`
+	DeliveryID   int       `gorm:"column:delivery_id;primaryKey"`
+	Amount       float64   `gorm:"column:amount"`
+	Address      string    `gorm:"column:address"`
+	Quantity     int       `gorm:"column:quantity"`
+	ProductType  string    `gorm:"column:product_type"`
+	DeliveryDate time.Time `gorm:"column:delivery_date"`
+	EmployeeID   int       `gorm:"column:employes_id"` // Тут та же ошибка
+	TransportID  int       `gorm:"column:transport_id"`
+	SalesPointID int       `gorm:"column:sales_point_id"`
 }
 
-// SalesPoint (Место продажи)
+type Transport struct {
+	TransportID     int       `gorm:"column:transport_id;primaryKey"`
+	Brand           string    `gorm:"column:brand"`
+	Year            int       `gorm:"column:year"`
+	MaintenanceDate time.Time `gorm:"column:maintenance_date"`
+	FuelType        string    `gorm:"column:fuel_type"`
+	YearOfIssue     int       `gorm:"column:year_of_future"` // Тут странное название в БД
+	EmployeeID      int       `gorm:"column:employee_id"`
+}
+
 type SalesPoint struct {
-	SalesPointID  uint       `gorm:"primaryKey" json:"sales_point_id"`
-	Deliveries    []Delivery `gorm:"foreignKey:SalesPointID" json:"deliveries"` // 1-ко-многим с Доставками
-	ClientType    string     `json:"client_type"`
-	ShippingTime  time.Time  `json:"shipping_time"`
-	RecipientName string     `json:"recipient_name"`
-	Address       string     `json:"address"`
+	SalesPointID  int       `gorm:"column:sales_point_id;primaryKey"`
+	ClientType    string    `gorm:"column:client_type"`
+	ShippingTime  time.Time `gorm:"column:shipping_time"`
+	RecipientName string    `gorm:"column:recipient_name"`
+	Address       string    `gorm:"column:address"`
+}
+
+type Product struct {
+	ProductID   int     `gorm:"column:product_id;primaryKey"`
+	BatchNumber string  `gorm:"column:batch_number"`
+	ProductType string  `gorm:"column:product_type"`
+	CostPrice   float64 `gorm:"column:cost_price"`
+	Name        string  `gorm:"column:name"`
+}
+
+type Material struct {
+	MaterialID        int     `gorm:"column:material_id;primaryKey"`
+	Price             float64 `gorm:"column:price"`
+	Type              string  `gorm:"column:type"`
+	Quantity          int     `gorm:"column:quantity"`
+	StorageDepartment string  `gorm:"column:storage_department"`
+}
+
+type ProductDelivery struct {
+	ProductID  int `gorm:"column:product_id"`
+	DeliveryID int `gorm:"column:delivery_id"`
+}
+
+type ProductMaterial struct {
+	ProductID  int `gorm:"column:product_id"`
+	MaterialID int `gorm:"column:material_id"`
 }
