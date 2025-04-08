@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import api from '../api/client';
+import api from '../../api/client.ts';
 
 export default function SqlConsole() {
-    const [sqlQuery, setSqlQuery] = useState<string>('SELECT * FROM employees;');
+    const [sqlQuery, setSqlQuery] = useState<string>('SELECT * FROM employee;');
     const [results, setResults] = useState<any[]>([]);
     const [error, setError] = useState<string>('');
 

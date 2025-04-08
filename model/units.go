@@ -1,10 +1,47 @@
 package model
 
 import (
+	"database/sql/driver"
+	"encoding/json"
+	"gorm.io/gorm"
 	"time"
 )
 
-// Обрати внимание - названия таблиц и полей ТОЧНО как в твоей БД
+type ColumnsArray []string
+
+// Реализуем интерфейсы для работы с JSONB
+func (a *ColumnsArray) Scan(value interface{}) error {
+	return json.Unmarshal(value.([]byte), a)
+}
+
+func (a ColumnsArray) Value() (driver.Value, error) {
+	return json.Marshal(a)
+}
+
+type TableMeta struct {
+	ID        uint   `gorm:"primaryKey"`
+	Name      string `gorm:"uniqueIndex;size:255;not null"`
+	Columns   string `gorm:"type:text;not null"` // Сохраняем как JSON строку
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Преобразуем колонки в JSON перед сохранением
+func (t *TableMeta) BeforeSave(tx *gorm.DB) (err error) {
+	if t.Columns == "" {
+		t.Columns = "[]"
+	}
+	return
+}
+
+type SavedQuery struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Query     string    `gorm:"type:text;not null" json:"query"`
+	Name      string    `gorm:"type:varchar(255)" json:"name"`
+	LastUsed  time.Time `gorm:"not null" json:"lastUsed"`
+	UseCount  int       `gorm:"default:1" json:"useCount"`
+	CreatedAt time.Time `json:"createdAt"`
+}
 type Employee struct {
 	EmployeeID  int     `gorm:"column:employee_id;primaryKey"`
 	FullName    string  `gorm:"column:full_name"`
