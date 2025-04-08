@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -26,69 +25,106 @@ func isValidIdentifier(s string) bool {
 
 // CreateTable создает новую таблицу
 func CreateTable(c *gin.Context) {
-	var req struct {
+	// 1. Определяем структуру для входящего запроса
+	type Request struct {
 		Name    string   `json:"name" binding:"required"`
-		Columns []string `json:"columns" binding:"required"`
+		Columns []string `json:"columns" binding:"required,min=1,dive,required"`
 	}
 
+	// 2. Парсим входящий JSON
+	var req Request
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный формат запроса: " + err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Неверный формат запроса",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	// Валидация имени таблицы
-	if !regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`).MatchString(req.Name) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректное имя таблицы. Используйте только буквы, цифры и _"})
+	// 3. Валидация имени таблицы
+	if !isValidIdentifier(req.Name) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":        "Некорректное имя таблицы",
+			"requirements": "Должно начинаться с буквы и содержать только a-z, 0-9, _",
+			"received":     req.Name,
+		})
 		return
 	}
 
-	// Проверяем существование таблицы
-	var exists bool
+	// 4. Проверяем существование таблицы
+	var tableExists bool
 	if err := initializers.DB.Raw(`
         SELECT EXISTS (
             SELECT FROM information_schema.tables 
             WHERE table_name = ?
-        )`, req.Name).Scan(&exists).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка проверки таблицы"})
+        )`, strings.ToLower(req.Name)).Scan(&tableExists).Error; err != nil {
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Ошибка проверки существования таблицы",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	if exists {
-		c.JSON(http.StatusConflict, gin.H{"error": "Таблица уже существует"})
+	if tableExists {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": fmt.Sprintf("Таблица '%s' уже существует", req.Name),
+		})
 		return
 	}
 
-	// Формируем SQL для создания таблицы
-	columns := make([]string, 0, len(req.Columns))
-	hasSerial := false // Объявляем переменную здесь
+	// 5. Обрабатываем колонки
+	var columns []string
+	var hasSerial bool
+	columnNames := make(map[string]bool)
+	validTypes := map[string]bool{
+		"INTEGER": true, "SERIAL": true, "VARCHAR(255)": true,
+		"TEXT": true, "BOOLEAN": true, "DATE": true,
+		"TIMESTAMP": true, "FLOAT": true, "JSON": true, "UUID": true,
+	}
 
-	for _, col := range req.Columns {
+	for i, col := range req.Columns {
 		parts := strings.SplitN(col, ":", 2)
 		if len(parts) != 2 {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": fmt.Sprintf("Неверный формат колонки: %s. Ожидается name:type", col),
+				"error":    "Неверный формат колонки",
+				"position": i + 1,
+				"expected": "name:type",
+				"example":  "price:FLOAT",
 			})
 			return
 		}
 
 		name, colType := parts[0], parts[1]
-		if !regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`).MatchString(name) {
+
+		// Проверка имени колонки
+		if !isValidIdentifier(name) {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": fmt.Sprintf("Некорректное имя колонки: %s", name),
+				"error":    "Некорректное имя колонки",
+				"position": i + 1,
+				"name":     name,
 			})
 			return
 		}
 
-		// Проверяем допустимость типа данных
-		validTypes := map[string]bool{
-			"INTEGER": true, "SERIAL": true, "VARCHAR(255)": true,
-			"TEXT": true, "BOOLEAN": true, "DATE": true,
-			"TIMESTAMP": true, "FLOAT": true, "JSON": true, "UUID": true,
+		// Проверка на дубликаты
+		if columnNames[name] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":    "Дублирующееся имя колонки",
+				"position": i + 1,
+				"name":     name,
+			})
+			return
 		}
+		columnNames[name] = true
 
+		// Проверка типа данных
 		if !validTypes[colType] {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": fmt.Sprintf("Недопустимый тип данных: %s", colType),
+				"error":    "Недопустимый тип данных",
+				"position": i + 1,
+				"type":     colType,
+				"allowed":  getKeys(validTypes),
 			})
 			return
 		}
@@ -100,45 +136,87 @@ func CreateTable(c *gin.Context) {
 		columns = append(columns, fmt.Sprintf("%s %s", name, colType))
 	}
 
-	// Добавляем первичный ключ, если нет SERIAL поля
+	// 6. Добавляем первичный ключ, если нет SERIAL
 	if !hasSerial {
 		columns = append(columns, "id SERIAL PRIMARY KEY")
 	}
 
-	sql := fmt.Sprintf("CREATE TABLE %s (%s)", req.Name, strings.Join(columns, ", "))
+	// 7. Формируем SQL запрос
+	sql := fmt.Sprintf("CREATE TABLE %s (\n  %s\n)", req.Name, strings.Join(columns, ",\n  "))
 
-	// Выполняем в транзакции
+	// 8. Начинаем транзакцию
 	tx := initializers.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// 9. Создаем таблицу
 	if err := tx.Exec(sql).Error; err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Ошибка создания таблицы: " + err.Error(),
-			"sql":   sql,
+			"error":   "Ошибка выполнения SQL",
+			"details": err.Error(),
+			"sql":     sql,
 		})
 		return
 	}
 
-	// Создаем запись в мета-таблице
+	// 10. Сохраняем метаданные
+	columnsJSON, err := json.Marshal(req.Columns)
+	if err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Ошибка сериализации колонок",
+			"details": err.Error(),
+		})
+		return
+	}
+
 	meta := model.TableMeta{
 		Name:    req.Name,
-		Columns: req.Columns,
+		Columns: string(columnsJSON),
 	}
 
 	if err := tx.Create(&meta).Error; err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Ошибка сохранения метаданных таблицы",
+			"error":   "Ошибка сохранения метаданных",
+			"details": err.Error(),
 		})
 		return
 	}
 
-	tx.Commit()
+	// 11. Фиксируем транзакцию
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Ошибка фиксации транзакции",
+			"details": err.Error(),
+		})
+		return
+	}
 
+	// 12. Возвращаем успешный ответ
 	c.JSON(http.StatusCreated, gin.H{
-		"status":  "Таблица создана",
+		"status":  "Таблица успешно создана",
 		"table":   req.Name,
+		"meta_id": meta.ID,
 		"columns": columns,
 	})
+}
+
+// Вспомогательные функции
+//func isValidIdentifier(s string) bool {
+//	return regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`).MatchString(s)
+//}
+
+func getKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // ListTables возвращает список таблиц
@@ -231,8 +309,8 @@ func DropTable(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "Таблица удалена"})
 }
 
-// BackupDB создает резервную копию
 func BackupDB(c *gin.Context) {
+	// Создаем временный файл
 	backupFile := fmt.Sprintf("backup_%s.zip", time.Now().Format("20060102_150405"))
 	zipFile, err := os.Create(backupFile)
 	if err != nil {
@@ -248,10 +326,10 @@ func BackupDB(c *gin.Context) {
 	// Получаем список таблиц
 	var tables []string
 	if err := initializers.DB.Raw(`
-		SELECT table_name 
-		FROM information_schema.tables 
-		WHERE table_schema = 'public'
-	`).Scan(&tables).Error; err != nil {
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public'
+    `).Scan(&tables).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения списка таблиц"})
 		return
 	}
@@ -260,24 +338,11 @@ func BackupDB(c *gin.Context) {
 	for _, table := range tables {
 		file, err := zipWriter.Create(table + ".csv")
 		if err != nil {
-			log.Printf("Ошибка создания файла для таблицы %s: %v", table, err)
 			continue
 		}
 
 		if err := exportTableToWriter(table, file); err != nil {
-			log.Printf("Ошибка экспорта таблицы %s: %v", table, err)
-		}
-	}
-
-	// Экспортируем метаданные
-	metaFile, err := zipWriter.Create("_metadata.json")
-	if err != nil {
-		log.Printf("Ошибка создания файла метаданных: %v", err)
-	} else {
-		var metas []model.TableMeta
-		if err := initializers.DB.Find(&metas).Error; err == nil {
-			metaJson, _ := json.Marshal(metas)
-			metaFile.Write(metaJson)
+			continue
 		}
 	}
 
@@ -648,6 +713,185 @@ func ExportQueryResults(c *gin.Context) {
 	}
 }
 
+// BackupTable создает резервную копию таблицы
+func BackupTable(c *gin.Context) {
+	tableName := c.Param("name")
+
+	// Создаем временный файл
+	backupFile := fmt.Sprintf("backup_%s_%s.csv", tableName, time.Now().Format("20060102_150405"))
+	file, err := os.Create(backupFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось создать файл бэкапа"})
+		return
+	}
+	defer os.Remove(backupFile)
+	defer file.Close()
+
+	// Экспортируем данные
+	if err := exportTableToWriter(tableName, file); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Возвращаем файл
+	c.FileAttachment(backupFile, fmt.Sprintf("%s_backup.csv", tableName))
+}
+
+// BackupRow создает резервную копию строки
+func BackupRow(c *gin.Context) {
+	tableName := c.Param("name")
+	rowID := c.Param("id")
+
+	var data map[string]interface{}
+	if err := initializers.DB.Table(tableName).Where("id = ?", rowID).First(&data).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Строка не найдена"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"table": tableName,
+		"id":    rowID,
+		"data":  data,
+	})
+}
+
+// RestoreRow восстанавливает строку из резервной копии
+func RestoreRow(c *gin.Context) {
+	var backup struct {
+		Table string                 `json:"table"`
+		ID    string                 `json:"id"`
+		Data  map[string]interface{} `json:"data"`
+	}
+
+	if err := c.ShouldBindJSON(&backup); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Проверяем существование таблицы
+	var exists bool
+	if err := initializers.DB.Raw(`
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_name = ?
+        )`, backup.Table).Scan(&exists).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Таблица не найдена"})
+		return
+	}
+
+	// Восстанавливаем данные
+	if err := initializers.DB.Table(backup.Table).Where("id = ?", backup.ID).Updates(backup.Data).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "Строка восстановлена"})
+}
+
+// AddColumn добавляет колонку в таблицу
+func AddColumn(c *gin.Context) {
+	tableName := c.Param("name")
+
+	var req struct {
+		Name string `json:"name" binding:"required"`
+		Type string `json:"type" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Проверяем существование таблицы
+	var exists bool
+	if err := initializers.DB.Raw(`
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_name = ?
+        )`, tableName).Scan(&exists).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Таблица не найдена"})
+		return
+	}
+
+	// Проверяем, что колонка не существует
+	var columnExists bool
+	if err := initializers.DB.Raw(`
+        SELECT EXISTS (
+            SELECT FROM information_schema.columns 
+            WHERE table_name = ? AND column_name = ?
+        )`, tableName, req.Name).Scan(&columnExists).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if columnExists {
+		c.JSON(http.StatusConflict, gin.H{"error": "Колонка уже существует"})
+		return
+	}
+
+	// Добавляем колонку
+	sql := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, req.Name, req.Type)
+	if err := initializers.DB.Exec(sql).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "Колонка добавлена"})
+}
+
+// Получение данных таблицы
+func GetTableData(c *gin.Context) {
+	tableName := c.Param("name")
+
+	// Получаем колонки
+	var columns []string
+	if err := initializers.DB.Raw(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = ?
+        ORDER BY ordinal_position
+    `, tableName).Scan(&columns).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Получаем данные
+	var rows []map[string]interface{}
+	if err := initializers.DB.Table(tableName).Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"columns": columns,
+		"rows":    rows,
+	})
+}
+
+// Удаление колонки
+func DropColumn(c *gin.Context) {
+	tableName := c.Param("name")
+	columnName := c.Param("column")
+
+	sql := fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", tableName, columnName)
+	if err := initializers.DB.Exec(sql).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "Колонка удалена"})
+}
+
 // Вспомогательные функции
 
 func exportTableToWriter(table string, w io.Writer) error {
@@ -705,6 +949,105 @@ func exportTableToWriter(table string, w io.Writer) error {
 	}
 
 	return nil
+}
+
+// RestoreTable восстанавливает таблицу из CSV файла
+func RestoreTable(c *gin.Context) {
+	tableName := c.Param("name")
+
+	// 1. Проверяем существование таблицы
+	var exists bool
+	if err := initializers.DB.Raw(`
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_name = ?
+        )`, tableName).Scan(&exists).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка проверки таблицы"})
+		return
+	}
+
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Таблица '%s' не найдена", tableName)})
+		return
+	}
+
+	// 2. Получаем файл из запроса
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Файл не загружен"})
+		return
+	}
+
+	// 3. Открываем файл
+	f, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка открытия файла"})
+		return
+	}
+	defer f.Close()
+
+	// 4. Читаем CSV
+	reader := csv.NewReader(f)
+	headers, err := reader.Read()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ошибка чтения CSV"})
+		return
+	}
+
+	// 5. Начинаем транзакцию
+	tx := initializers.DB.Begin()
+
+	// 6. Очищаем таблицу перед восстановлением
+	if err := tx.Exec(fmt.Sprintf("TRUNCATE TABLE %s", tableName)).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка очистки таблицы"})
+		return
+	}
+
+	// 7. Импортируем данные
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Ошибка чтения строки CSV"})
+			return
+		}
+
+		// Формируем запрос
+		values := make([]string, len(record))
+		for i, v := range record {
+			if v == "NULL" {
+				values[i] = "NULL"
+			} else {
+				values[i] = fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''"))
+			}
+		}
+
+		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			tableName,
+			strings.Join(headers, ", "),
+			strings.Join(values, ", "))
+
+		if err := tx.Exec(query).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "Ошибка вставки данных",
+				"details": err.Error(),
+			})
+			return
+		}
+	}
+
+	// 8. Фиксируем транзакцию
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка фиксации транзакции"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": fmt.Sprintf("Таблица %s успешно восстановлена", tableName)})
 }
 
 func restoreTableFromZip(tx *gorm.DB, zipFile *zip.File, tableName string) error {

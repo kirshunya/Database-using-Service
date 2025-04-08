@@ -1,6 +1,6 @@
 import { FC, useState } from "react";
 import { Button, TextField, Snackbar } from "@mui/material";
-import { dropTable } from "../api";
+import { dropTable } from "../../api.ts";
 
 const DropTable: FC = () => {
     const [tableName, setTableName] = useState("");

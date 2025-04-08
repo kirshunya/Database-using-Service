@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios, { AxiosError } from 'axios';
+import { v4 as uuidv4 } from 'uuid';
+import { ColumnDefinition, TableDefinition } from './types.ts';
+import TableManager from "./components/TableManager.tsx";
 
 const API_URL = 'http://localhost:8081/api';
 
@@ -9,17 +12,6 @@ const COLUMN_TYPES = [
     'DATE', 'TIMESTAMP', 'FLOAT', 'JSON', 'UUID'
 ] as const;
 
-type ColumnType = typeof COLUMN_TYPES[number];
-
-interface ColumnDefinition {
-    name: string;
-    type: ColumnType;
-}
-
-interface TableDefinition {
-    name: string;
-    columns: ColumnDefinition[];
-}
 
 interface ApiError {
     error?: string;
@@ -34,20 +26,28 @@ interface SavedQuery {
     useCount: number;
 }
 
-type TabType = 'tables' | 'queries' | 'backup';
+type TabType = 'tables' | 'queries' | 'backup' | 'table-manager';
 
 function App() {
     const [tables, setTables] = useState<string[]>([]);
-    const [activeTab, setActiveTab] = useState<TabType>('tables');
     const [newTable, setNewTable] = useState<TableDefinition>({
         name: '',
-        columns: [{ name: '', type: 'VARCHAR(255)' }]
+        columns: [{ id: uuidv4(), name: '', type: 'VARCHAR(255)' }] // Добавляем уникальный id для каждой колонки
     });
+
+    const [activeTab, setActiveTab] = useState<TabType>('tables');
+
     const [currentQuery, setCurrentQuery] = useState<string>('SELECT * FROM employees');
     const [queryResults, setQueryResults] = useState<any[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
     const [queryName, setQueryName] = useState<string>('');
+
+    const [backupFile, setBackupFile] = useState<File | null>(null);
+    const [tableBackupFile, setTableBackupFile] = useState<File | null>(null);
+    const [selectedTableForBackup, setSelectedTableForBackup] = useState<string>('');
+    const [rowId, setRowId] = useState<string>('');
+
     const [isLoading, setIsLoading] = useState({
         tables: false,
         queries: false,
@@ -100,6 +100,41 @@ function App() {
         console.error(error);
     };
 
+    // const handleTableRestore = async () => {
+    //     if (!selectedTableForBackup || !tableBackupFile) return;
+    //
+    //     setIsLoading(prev => ({ ...prev, backup: true }));
+    //     const formData = new FormData();
+    //     formData.append('file', tableBackupFile);
+    //
+    //     try {
+    //         const response = await axios.post(
+    //             `${API_URL}/tables/${selectedTableForBackup}/restore`,
+    //             formData,
+    //             {
+    //                 headers: {
+    //                     'Content-Type': 'multipart/form-data'
+    //                 }
+    //             }
+    //         );
+    //
+    //         alert(response.data.status || 'Таблица успешно восстановлена');
+    //         setError(null);
+    //         // Обновляем данные таблицы
+    //         fetchTables();
+    //     } catch (err) {
+    //         if (err.response?.status === 404) {
+    //             setError(`Таблица "${selectedTableForBackup}" не найдена на сервере`);
+    //         } else if (err.response?.data?.error) {
+    //             setError(err.response.data.error);
+    //         } else {
+    //             setError('Ошибка при восстановлении таблицы');
+    //         }
+    //     } finally {
+    //         setIsLoading(prev => ({ ...prev, backup: false }));
+    //     }
+    // };
+
     const deleteQuery = async (id: number) => {
         if (!confirm('Вы уверены, что хотите удалить этот запрос?')) return;
 
@@ -131,86 +166,242 @@ function App() {
         }
     };
 
-    const handleRestore = async () => {
-        const fileInput = document.getElementById('restoreFile') as HTMLInputElement;
-        if (!fileInput.files?.length) {
-            setError('Выберите файл для восстановления');
-            return;
-        }
-
+    const handleFullBackup = async () => {
         setIsLoading(prev => ({ ...prev, backup: true }));
-        const formData = new FormData();
-        formData.append('backup', fileInput.files[0]);
-
         try {
-            await axios.post(`${API_URL}/restore`, formData, {
-                headers: {
-                    'Content-Type': 'multipart/form-data'
-                }
+            const response = await axios.get(`${API_URL}/backup`, {
+                responseType: 'blob',
             });
-            alert('База данных успешно восстановлена!');
-            fetchTables();
+
+            const url = window.URL.createObjectURL(new Blob([response.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `db_backup_${new Date().toISOString()}.zip`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
             setError(null);
         } catch (err) {
-            handleApiError(err, 'Ошибка восстановления базы');
+            handleApiError(err, 'Ошибка создания бэкапа');
         } finally {
             setIsLoading(prev => ({ ...prev, backup: false }));
         }
     };
 
+    const handleFullRestore = async () => {
+        if (!backupFile) {
+            setError('Выберите файл бэкапа');
+            return;
+        }
+
+        // Добавляем проверку файла перед отправкой
+        if (!backupFile.name.endsWith('.zip')) {
+            setError('Только ZIP-архивы поддерживаются');
+            return;
+        }
+
+        //setIsLoading(true);
+        setError(null);
+
+        try {
+            const formData = new FormData();
+            formData.append('db_backup', backupFile);
+
+            // Добавляем заголовок и параметры явно
+            const response = await axios.post(`${API_URL}/restore`, formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
+                transformRequest: (data) => data, // Отключаем преобразование axios
+                timeout: 60000, // Увеличиваем таймаут для больших файлов
+            });
+
+            alert(response.data.status || 'База успешно восстановлена!');
+            window.location.reload();
+        } catch (err) {
+            if (axios.isAxiosError(err)) {
+                // Используем сообщение об ошибке от сервера
+                setError(err.response?.data?.error || 'Ошибка восстановления');
+
+                // Логируем детали для отладки
+                console.error('Детали ошибки:', {
+                    status: err.response?.status,
+                    data: err.response?.data,
+                    headers: err.response?.headers,
+                });
+            } else {
+                setError('Неизвестная ошибка');
+            }
+        } finally {
+            //setIsLoading(false);
+        }
+    };
+
+    const handleTableBackup = async () => {
+        if (!selectedTableForBackup) return;
+
+        setIsLoading(prev => ({ ...prev, backup: true }));
+        try {
+            const response = await axios.get(`${API_URL}/export/${selectedTableForBackup}`, {
+                responseType: 'blob',
+            });
+
+            const url = window.URL.createObjectURL(new Blob([response.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `${selectedTableForBackup}_backup_${new Date().toISOString()}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
+            setError(null);
+        } catch (err) {
+            handleApiError(err, 'Ошибка экспорта таблицы');
+        } finally {
+            setIsLoading(prev => ({ ...prev, backup: false }));
+        }
+    };
+
+    const handleTableRestore = async () => {
+        if (!selectedTableForBackup || !tableBackupFile) return;
+
+        setIsLoading(prev => ({ ...prev, backup: true }));
+        const formData = new FormData();
+        formData.append('file', tableBackupFile);
+
+        try {
+            await axios.post(`${API_URL}/tables/${selectedTableForBackup}/restore`, formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
+            });
+
+            alert(`Таблица ${selectedTableForBackup} успешно восстановлена!`);
+            setError(null);
+        } catch (err) {
+            handleApiError(err, 'Ошибка восстановления таблицы');
+        } finally {
+            setIsLoading(prev => ({ ...prev, backup: false }));
+        }
+    };
+
+    const handleRowBackup = async () => {
+        if (!selectedTableForBackup || !rowId) return;
+
+        try {
+            const response = await axios.get(`${API_URL}/tables/${selectedTableForBackup}/rows/${rowId}/backup`);
+
+            // Создаем JSON файл с данными строки
+            const dataStr = JSON.stringify(response.data, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = window.URL.createObjectURL(dataBlob);
+
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `${selectedTableForBackup}_row_${rowId}_backup.json`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
+            setError(null);
+        } catch (err) {
+            handleApiError(err, 'Ошибка создания бэкапа строки');
+        }
+    };
+
+    // const handleFullRestore = async () => {
+    //     const fileInput = document.getElementById('restoreFile') as HTMLInputElement;
+    //     if (!fileInput.files?.length) {
+    //         setError('Выберите файл для восстановления');
+    //         return;
+    //     }
+    //
+    //     setIsLoading(prev => ({ ...prev, backup: true }));
+    //     const formData = new FormData();
+    //     formData.append('backup', fileInput.files[0]);
+    //
+    //     try {
+    //         await axios.post(`${API_URL}/restore/table/:name`, formData, {
+    //             headers: {
+    //                 'Content-Type': 'multipart/form-data'
+    //             }
+    //         });
+    //         alert('База данных успешно восстановлена!');
+    //         fetchTables();
+    //         setError(null);
+    //     } catch (err) {
+    //         handleApiError(err, 'Ошибка восстановления базы');
+    //     } finally {
+    //         setIsLoading(prev => ({ ...prev, backup: false }));
+    //     }
+    // };
+
     const handleCreateTable = async () => {
+        // Валидация
         if (!newTable.name.trim()) {
             setError('Введите имя таблицы');
             return;
         }
 
-        if (newTable.columns.some(col => !col.name.trim())) {
-            setError('Все колонки должны иметь имя');
+        const invalidColumns = newTable.columns.filter(c => !c.name.trim());
+        if (invalidColumns.length > 0) {
+            setError(`Колонки ${invalidColumns.map((_, i) => i+1).join(', ')} не имеют имен`);
             return;
         }
 
+        // Устанавливаем загрузку только для таблиц
         setIsLoading(prev => ({ ...prev, tables: true }));
 
         try {
-            // Подготовка данных в правильном формате
             const requestData = {
                 name: newTable.name.trim(),
-                columns: newTable.columns.map(col =>
-                    `${col.name.trim()}:${col.type}`
-                )
+                columns: newTable.columns.map(c => `${c.name.trim()}:${c.type}`)
             };
 
-            console.log('Sending data:', requestData); // Для отладки
+            const { data } = await axios.post<{
+                status: string;
+                table: string;
+                meta_id?: number;
+                error?: string;
+            }>(`${API_URL}/tables`, requestData);
 
-            const { data } = await axios.post(`${API_URL}/tables`, requestData, {
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            });
+            if (data.error) {
+                throw new Error(data.error);
+            }
 
             // Успешное создание
             await fetchTables();
             setNewTable({
                 name: '',
-                columns: [{ name: '', type: 'VARCHAR(255)' }]
+                columns: [{ id: uuidv4(), name: '', type: 'VARCHAR(255)' }]
             });
             setError(null);
 
-            console.log('Table created:', data); // Для отладки
-
         } catch (err) {
+            const error = err as AxiosError<{
+                error?: string;
+                message?: string;
+                details?: string;
+            }> | Error;
+
             let errorMessage = 'Ошибка создания таблицы';
 
-            if (err.response) {
-                // Сервер вернул детали ошибки
-                errorMessage = err.response.data.error || errorMessage;
-                if (err.response.data.details) {
-                    errorMessage += `\nДетали: ${err.response.data.details}`;
+            if (axios.isAxiosError(error)) {
+                errorMessage = error.response?.data?.error ||
+                    error.response?.data?.message ||
+                    errorMessage;
+
+                if (error.response?.data?.details) {
+                    errorMessage += ` (${error.response.data.details})`;
                 }
+            } else {
+                errorMessage = error.message || errorMessage;
             }
 
             setError(errorMessage);
-            console.error('Create table error details:', err.response?.data || err.message);
+            console.error('Create table error:', error);
+
         } finally {
             setIsLoading(prev => ({ ...prev, tables: false }));
         }
@@ -269,22 +460,6 @@ function App() {
         }
     };
 
-    // const loadQuery = (query: string, name?: string) => {
-    //     if (!query) return;
-    //
-    //     setCurrentQuery(query);
-    //     setQueryName(name || '');
-    //
-    //     // Плавная прокрутка к редактору
-    //     setTimeout(() => {
-    //         const editor = document.querySelector('.query-editor');
-    //         if (editor) {
-    //             editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    //             (editor as HTMLTextAreaElement).focus();
-    //         }
-    //     }, 100);
-    // };
-
     const saveCurrentQuery = async () => {
         if (!currentQuery?.trim()) return;
 
@@ -309,14 +484,6 @@ function App() {
         }
     };
 
-    // const useSavedQuery = (query: string, name?: string) => {
-    //     setCurrentQuery(query);
-    //     setQueryName(name || '');
-    //     setTimeout(() => {
-    //         document.querySelector('.query-editor')?.scrollIntoView({ behavior: 'smooth' });
-    //     }, 100);
-    // };
-
     const exportData = async (table: string) => {
         try {
             window.open(`${API_URL}/export/${table}`, '_blank');
@@ -328,11 +495,14 @@ function App() {
     const addColumn = () => {
         setNewTable(prev => ({
             ...prev,
-            columns: [...prev.columns, { name: '', type: 'VARCHAR(255)' }]
+            columns: [
+                ...prev.columns,
+                { id: uuidv4(), name: '', type: 'VARCHAR(255)' } // Новые колонки тоже получают уникальный id
+            ]
         }));
     };
 
-    const updateColumn = (index: number, field: 'name' | 'type', value: string) => {
+    const updateColumn = (index: number, field: keyof ColumnDefinition, value: string) => {
         setNewTable(prev => {
             const updatedColumns = [...prev.columns];
             updatedColumns[index] = {
@@ -348,6 +518,7 @@ function App() {
 
     const removeColumn = (index: number) => {
         if (newTable.columns.length <= 1) return;
+
         setNewTable(prev => {
             const updatedColumns = [...prev.columns];
             updatedColumns.splice(index, 1);
@@ -357,7 +528,6 @@ function App() {
             };
         });
     };
-
 
     return (
         <div className="container">
@@ -392,6 +562,14 @@ function App() {
                 >
                     {isLoading.backup ? 'Загрузка...' : 'Бэкап'}
                 </button>
+
+                <button
+                    className={activeTab === 'table-manager' ? 'active' : ''}
+                    onClick={() => setActiveTab('table-manager')}
+                >
+                    Управление таблицами
+                </button>
+
             </div>
 
             {activeTab === 'tables' && (
@@ -413,7 +591,7 @@ function App() {
                         <div className="columns-section">
                             <label>Колонки</label>
                             {newTable.columns.map((col, i) => (
-                                <div key={`col-${i}-${col.name}`} className="column-row">
+                                <div key={col.id} className="column-row"> {/* Используем col.id вместо индекса */}
                                     <input
                                         value={col.name}
                                         onChange={(e) => updateColumn(i, 'name', e.target.value)}
@@ -421,10 +599,10 @@ function App() {
                                     />
                                     <select
                                         value={col.type}
-                                        onChange={(e) => updateColumn(i, 'type', e.target.value as ColumnType)}
+                                        onChange={(e) => updateColumn(i, 'type', e.target.value)}
                                     >
                                         {COLUMN_TYPES.map(type => (
-                                            <option key={`opt-${type}`} value={type}>{type}</option>
+                                            <option key={type} value={type}>{type}</option>
                                         ))}
                                     </select>
                                     <button
@@ -611,37 +789,117 @@ function App() {
             {activeTab === 'backup' && (
                 <div className="tab-content">
                     <h2>Резервное копирование и восстановление</h2>
+
+                    {/* Секция полного бэкапа */}
                     <div className="backup-section">
-                        <h3>Создать резервную копию</h3>
-                        <button
-                            className="backup-btn"
-                            onClick={() => window.open(`${API_URL}/backup`, '_blank')}
-                            disabled={isLoading.backup}
-                        >
-                            Создать полную резервную копию
-                        </button>
-                        <p>Скачать ZIP-архив со всеми таблицами</p>
+                        <h3>Полный бэкап базы данных</h3>
+                        <div className="backup-actions">
+                            <button
+                                className="backup-btn"
+                                onClick={handleFullBackup}
+                                disabled={isLoading.backup}
+                            >
+                                {isLoading.backup ? 'Создание...' : 'Создать полный бэкап'}
+                            </button>
+                            <p>Создает ZIP-архив со всеми таблицами и метаданными</p>
+                        </div>
                     </div>
 
+                    {/* Секция восстановления */}
                     <div className="restore-section">
-                        <h3>Восстановить базу данных</h3>
-                        <input
-                            type="file"
-                            id="restoreFile"
-                            accept=".zip"
-                            className="file-input"
-                        />
-                        <button
-                            className="restore-btn"
-                            onClick={handleRestore}
-                            disabled={isLoading.backup}
-                        >
-                            {isLoading.backup ? 'Восстановление...' : 'Восстановить'}
-                        </button>
-                        <p className="warning">
-                            Внимание: восстановление перезапишет текущие данные!
-                        </p>
+                        <h3>Восстановление из бэкапа</h3>
+                        <div className="file-upload">
+                            <label htmlFor="restoreFile" className="file-upload-label">
+                                <input
+                                    type="file"
+                                    id="restoreFile"
+                                    accept=".zip"
+                                    onChange={(e) => setBackupFile(e.target.files?.[0] || null)}
+                                    className="file-input"
+                                />
+                                {backupFile ? backupFile.name : 'Выберите файл бэкапа (.zip)'}
+                            </label>
+                            <button
+                                className="restore-btn"
+                                onClick={handleFullRestore}
+                                disabled={!backupFile || isLoading.backup}
+                            >
+                                {isLoading.backup ? 'Восстановление...' : 'Восстановить базу'}
+                            </button>
+                            <p className="warning">
+                                Внимание: восстановление полностью перезапишет текущую базу данных!
+                            </p>
+                        </div>
                     </div>
+
+                    {/* Секция бэкапа отдельных таблиц */}
+                    <div className="table-backup-section">
+                        <h3>Бэкап отдельных таблиц</h3>
+                        <div className="table-selector">
+                            <select
+                                value={selectedTableForBackup || ''}
+                                onChange={(e) => setSelectedTableForBackup(e.target.value)}
+                                disabled={tables.length === 0}
+                            >
+                                <option value="">Выберите таблицу</option>
+                                {tables.map(table => (
+                                    <option key={table} value={table}>{table}</option>
+                                ))}
+                            </select>
+                            <button
+                                className="backup-table-btn"
+                                onClick={handleTableBackup}
+                                disabled={!selectedTableForBackup || isLoading.backup}
+                            >
+                                {isLoading.backup ? 'Экспорт...' : 'Экспортировать таблицу'}
+                            </button>
+                        </div>
+                        <div className="table-restore">
+                            <input
+                                type="file"
+                                id="tableRestoreFile"
+                                accept=".csv"
+                                onChange={(e) => setTableBackupFile(e.target.files?.[0] || null)}
+                                className="file-input"
+                                disabled={!selectedTableForBackup}
+                            />
+                            <button
+                                className="restore-table-btn"
+                                onClick={handleTableRestore}
+                                disabled={!selectedTableForBackup || !tableBackupFile || isLoading.backup}
+                            >
+                                {isLoading.backup ? 'Импорт...' : 'Импортировать в таблицу'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Секция бэкапа строк */}
+                    {selectedTableForBackup && (
+                        <div className="row-backup-section">
+                            <h3>Бэкап отдельных строк</h3>
+                            <div className="row-backup-controls">
+                                <input
+                                    type="text"
+                                    placeholder="ID строки"
+                                    value={rowId}
+                                    onChange={(e) => setRowId(e.target.value)}
+                                />
+                                <button
+                                    className="backup-row-btn"
+                                    onClick={handleRowBackup}
+                                    disabled={!rowId}
+                                >
+                                    Создать бэкап строки
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {activeTab === 'table-manager' && (
+                <div className="tab-content">
+                    <TableManager />
                 </div>
             )}
 
@@ -1168,6 +1426,114 @@ function App() {
           .query-actions button {
             width: 100%;
           }
+          .backup-section, 
+.restore-section, 
+.table-backup-section,
+.row-backup-section {
+  margin-bottom: 30px;
+  padding: 20px;
+  background: #f9f9f9;
+  border-radius: 6px;
+}
+
+.file-upload-label {
+  display: block;
+  padding: 12px;
+  border: 1px dashed #95a5a6;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 10px;
+  text-align: center;
+  transition: all 0.3s;
+}
+
+.file-upload-label:hover {
+  background: #f0f0f0;
+}
+
+.file-input {
+  display: none;
+}
+
+.table-selector {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.table-selector select {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.row-backup-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.row-backup-controls input {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.backup-btn, 
+.restore-btn,
+.backup-table-btn,
+.restore-table-btn,
+.backup-row-btn {
+  padding: 10px 20px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.backup-btn, 
+.backup-table-btn {
+  background: #3498db;
+  color: white;
+}
+
+.backup-btn:hover:not(:disabled),
+.backup-table-btn:hover:not(:disabled) {
+  background: #2980b9;
+}
+
+.restore-btn,
+.restore-table-btn {
+  background: #2ecc71;
+  color: white;
+}
+
+.restore-btn:hover:not(:disabled),
+.restore-table-btn:hover:not(:disabled) {
+  background: #27ae60;
+}
+
+.backup-row-btn {
+  background: #9b59b6;
+  color: white;
+}
+
+.backup-row-btn:hover:not(:disabled) {
+  background: #8e44ad;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.warning {
+  color: #e74c3c;
+  font-size: 0.9em;
+  margin-top: 10px;
+}
         }
       `}</style>
         </div>

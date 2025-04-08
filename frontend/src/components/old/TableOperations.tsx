@@ -1,6 +1,6 @@
 import { FC, useState } from "react";
 import { Button, TextField, Snackbar } from "@mui/material";
-import { createTable } from "../api";
+import { createTable } from "../../api.ts";
 
 const TableOperations: FC = () => {
     const [sql, setSql] = useState("");

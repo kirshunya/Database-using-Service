@@ -1,6 +1,6 @@
 import { FC, useState } from "react";
 import { Button, TextField, Snackbar, Typography } from "@mui/material";
-import { runQuery } from "../api";
+import { runQuery } from "../../api.ts";
 
 const QueryExecutor: FC = () => {
     const [sql, setSql] = useState("");
@@ -10,8 +10,8 @@ const QueryExecutor: FC = () => {
 
     const handleRunQuery = async () => {
         try {
-            const { data } = await runQuery(sql);  // Используем деструктуризацию, чтобы получить только нужные данные
-            setResults(data);  // Сохраняем данные запроса в состояние
+            const result = await runQuery(sql);
+            setResults(result.data);
             setMessage("Запрос выполнен успешно!");
             setOpen(true);
         } catch (error) {

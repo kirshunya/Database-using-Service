@@ -18,6 +18,23 @@ func (a ColumnsArray) Value() (driver.Value, error) {
 	return json.Marshal(a)
 }
 
+type Table struct {
+	Name    string   `json:"name"`
+	Columns []Column `json:"columns"`
+}
+
+type Column struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+type Backup struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"createdAt"`
+	Size      int64     `json:"size"`
+	Type      string    `json:"type"` // "table", "row", "full"
+}
+
 type TableMeta struct {
 	ID        uint   `gorm:"primaryKey"`
 	Name      string `gorm:"uniqueIndex;size:255;not null"`

@@ -9,20 +9,6 @@ import (
 func init() {
 	initializers.LoadEnv()
 	initializers.ConnectEnv()
-	//err := inits.DB.AutoMigrate(
-	//	&model.Employee{}, // Должно быть ПЕРВЫМ
-	//	&model.SalesPoint{},
-	//	&model.Transport{},
-	//	&model.Product{},
-	//	&model.Material{},
-	//	&model.Delivery{},
-	//	&model.Production{}, // Создаётся после Employee
-	//	&model.ProductDelivery{},
-	//	&model.ProductMaterial{},
-	//)
-	//if err != nil {
-	//	panic(err)
-	//}
 }
 
 func main() {
@@ -41,27 +27,41 @@ func main() {
 	})
 
 	// 1. Управление таблицами
+	// Управление таблицами
 	r.POST("/api/tables", controllers.CreateTable)
+	//r.POST("/api/tables/:name/columns", controllers.AddColumn)            // Добавление колонки
+	r.DELETE("/api/tables/:name/columns/:column", controllers.DropColumn) // Удаление колонки
 	r.GET("/api/tables", controllers.ListTables)
-	r.DELETE("/api/tables/:name", controllers.DropTable)
-	r.PUT("/api/tables/:name/columns", controllers.AlterTable)
+	r.DELETE("/api/tables/:name", controllers.DropTable)               // Удаление таблицы
+	r.PUT("/api/tables/:name/columns/:column", controllers.AlterTable) // Переименуем AlterTable в AlterColumn
 
 	r.POST("/api/queries/save", controllers.SaveQuery)
 	r.GET("/api/queries/history", controllers.GetQueryHistory)
 
 	// 2. Резервные копии
-	r.POST("/api/backup", controllers.BackupDB)
+	r.GET("/api/backup", controllers.BackupDB)
 	r.POST("/api/restore", controllers.RestoreDB)
 
+	r.POST("/api/tables/:name/restore", controllers.RestoreTable)
+	r.GET("/api/tables/:name/backup", controllers.ExportTable)
+
 	// 3. Управление запросами
-	r.POST("/api/queries", controllers.SaveQuery)
-	r.GET("/api/queries", controllers.ListQueries)
+	//r.POST("/api/queries", controllers.SaveQuery)
+	//r.GET("/api/queries", controllers.ListQueries)
 	r.POST("/api/queries/execute", controllers.ExecuteQuery)
 	r.DELETE("/api/queries/:id", controllers.DeleteQuery)
 
 	// 4. Экспорт данных
 	r.GET("/api/export/:table", controllers.ExportTable)
 	r.POST("/api/export/query", controllers.ExportQueryResults)
+
+	r.GET("/api/tables/:name/info", controllers.GetTableInfo)
+	r.GET("/api/tables/:name/data", controllers.GetTableData)
+	//r.GET("/api/tables/:name/backup", controllers.BackupTable)
+	//r.POST("/api/restore/table/:name", controllers.RestoreTable)
+	r.GET("/api/tables/:name/rows/:id/backup", controllers.BackupRow)
+	r.POST("/api/tables/:name/rows/restore", controllers.RestoreRow)
+	r.POST("/api/tables/:name/columns", controllers.AddColumn)
 
 	r.Run(":8081")
 }
