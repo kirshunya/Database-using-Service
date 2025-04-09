@@ -892,6 +892,94 @@ func GetTableData(c *gin.Context) {
 	})
 }
 
+// AddRow добавляет новую строку в таблицу
+func AddRow(c *gin.Context) {
+	tableName := c.Param("name")
+	var rowData map[string]interface{}
+
+	if err := c.ShouldBindJSON(&rowData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := initializers.DB.Table(tableName).Create(&rowData).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "Строка добавлена",
+		"data":   rowData,
+	})
+}
+
+// UpdateRow обновляет существующую строку
+func UpdateRow(c *gin.Context) {
+	tableName := c.Param("name")
+	rowID := c.Param("id")
+
+	var rowData map[string]interface{}
+	if err := c.ShouldBindJSON(&rowData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Получаем имя первичного ключа
+	pkColumn, err := getPrimaryKeyColumn(initializers.DB, tableName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := initializers.DB.Table(tableName).Where(pkColumn+" = ?", rowID).Updates(rowData).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "Строка обновлена",
+		"data":   rowData,
+	})
+}
+
+// DeleteRow удаляет строку
+func DeleteRow(c *gin.Context) {
+	tableName := c.Param("name")
+	rowID := c.Param("id")
+
+	// Получаем имя первичного ключа
+	pkColumn, err := getPrimaryKeyColumn(initializers.DB, tableName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := initializers.DB.Table(tableName).Where(pkColumn+" = ?", rowID).Delete(nil).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "Строка удалена"})
+}
+
+// Вспомогательная функция для получения первичного ключа
+//func getPrimaryKeyColumn(db *gorm.DB, tableName string) (string, error) {
+//	var pkColumn string
+//	// Для PostgreSQL
+//	query := `
+//		SELECT a.attname
+//		FROM pg_index i
+//		JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+//		WHERE i.indrelid = $1::regclass AND i.indisprimary
+//		LIMIT 1;
+//	`
+//	row := db.Raw(query, tableName).Row()
+//	if err := row.Scan(&pkColumn); err != nil {
+//		return "", err
+//	}
+//	return pkColumn, nil
+//}
+
 // Удаление колонки
 func DropColumn(c *gin.Context) {
 	tableName := c.Param("name")

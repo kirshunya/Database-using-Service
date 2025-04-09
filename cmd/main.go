@@ -58,5 +58,9 @@ func main() {
 	r.POST("/api/tables/:name/rows/restore", controllers.RestoreRow)
 	r.POST("/api/tables/:name/columns", controllers.AddColumn)
 
+	r.POST("/api/tables/:name/rows", controllers.AddRow)
+	r.PUT("/api/tables/:name/rows/:id", controllers.UpdateRow)
+	r.DELETE("/api/tables/:name/rows/:id", controllers.DeleteRow)
+
 	r.Run(":8081")
 }
