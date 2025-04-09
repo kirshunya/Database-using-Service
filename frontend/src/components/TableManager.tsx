@@ -19,7 +19,7 @@ const TableManager: React.FC = () => {
     const [selectedTable, setSelectedTable] = useState<string>('');
     const [tableData, setTableData] = useState<TableData>({ columns: [], rows: [] });
     const [newColumn, setNewColumn] = useState({ name: '', type: 'TEXT' });
-    //const [backupName, setBackupName] = useState('');
+    const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
     // Загрузка списка таблиц
     useEffect(() => {
@@ -42,7 +42,7 @@ const TableManager: React.FC = () => {
             setSelectedTable(tableName);
         } catch (error) {
             console.error('Ошибка загрузки данных таблицы:', error);
-            setTableData({ columns: [], rows: [] }); // Сброс при ошибке
+            setTableData({ columns: [], rows: [] });
         }
     };
 
@@ -59,6 +59,17 @@ const TableManager: React.FC = () => {
             setNewColumn({ name: '', type: 'TEXT' });
         } catch (error) {
             console.error('Ошибка добавления колонки:', error);
+        }
+    };
+
+    // Удаление колонки
+    const handleDeleteColumn = async (columnName: string) => {
+        try {
+            await axios.delete(`${API_URL}/tables/${selectedTable}/columns/${columnName}`);
+            loadTableData(selectedTable);
+            setConfirmDelete(null);
+        } catch (error) {
+            console.error('Ошибка удаления колонки:', error);
         }
     };
 
@@ -122,7 +133,6 @@ const TableManager: React.FC = () => {
                     {/* Управление таблицей */}
                     <div className="table-actions">
                         <button onClick={backupTable}>Создать бэкап</button>
-
                         <input
                             type="file"
                             onChange={e => e.target.files && restoreTable(e.target.files[0])}
@@ -153,7 +163,20 @@ const TableManager: React.FC = () => {
                             <thead>
                             <tr>
                                 {tableData.columns.map(column => (
-                                    <th key={column}>{column}</th>
+                                    <th key={column}>
+                                        <div className="column-header">
+                                            <span>{column}</span>
+                                            <button
+                                                className="delete-column-btn"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setConfirmDelete(column);
+                                                }}
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
+                                    </th>
                                 ))}
                             </tr>
                             </thead>
@@ -170,11 +193,109 @@ const TableManager: React.FC = () => {
                             </tbody>
                         </table>
                     </div>
+
+                    {/* Модальное окно подтверждения удаления */}
+                    {confirmDelete && (
+                        <div className="modal-overlay">
+                            <div className="modal">
+                                <p>Вы уверены, что хотите удалить колонку "{confirmDelete}"?</p>
+                                <div className="modal-actions">
+                                    <button onClick={() => handleDeleteColumn(confirmDelete)}>
+                                        Удалить
+                                    </button>
+                                    <button onClick={() => setConfirmDelete(null)}>
+                                        Отмена
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
+            {/* Стили */}
+            <style>{`
+                .table-manager {
+                    display: flex;
+                    gap: 20px;
+                    padding: 20px;
+                }
+                .table-list {
+                    width: 200px;
+                    border-right: 1px solid #ccc;
+                    padding-right: 20px;
+                }
+                .table-list ul {
+                    list-style: none;
+                    padding: 0;
+                }
+                .table-list li {
+                    padding: 8px;
+                    cursor: pointer;
+                }
+                .table-list li.active {
+                    background-color: #f0f0f0;
+                    font-weight: bold;
+                }
+                .table-content {
+                    flex: 1;
+                }
+                .add-column {
+                    margin: 15px 0;
+                    display: flex;
+                    gap: 10px;
+                }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                }
+                th, td {
+                    border: 1px solid #ddd;
+                    padding: 8px;
+                    text-align: left;
+                }
+                th {
+                    background-color: #f2f2f2;
+                }
+                .column-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .delete-column-btn {
+                    background: none;
+                    border: none;
+                    color: #ff4444;
+                    cursor: pointer;
+                    font-size: 16px;
+                    padding: 0 5px;
+                }
+                .modal-overlay {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background: rgba(0,0,0,0.5);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    z-index: 1000;
+                }
+                .modal {
+                    background: white;
+                    padding: 20px;
+                    border-radius: 5px;
+                    min-width: 300px;
+                }
+                .modal-actions {
+                    display: flex;
+                    justify-content: flex-end;
+                    gap: 10px;
+                    margin-top: 20px;
+                }
+            `}</style>
         </div>
-
     );
 };
 

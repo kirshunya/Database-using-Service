@@ -742,8 +742,22 @@ func BackupRow(c *gin.Context) {
 	tableName := c.Param("name")
 	rowID := c.Param("id")
 
+	// 1. Получаем имя первичного ключа для таблицы
+	pkColumn, err := getPrimaryKeyColumn(initializers.DB, tableName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 2. Выполняем запрос с динамическим PK
 	var data map[string]interface{}
-	if err := initializers.DB.Table(tableName).Where("id = ?", rowID).First(&data).Error; err != nil {
+	query := fmt.Sprintf("SELECT * FROM %s WHERE %s = ? LIMIT 1", tableName, pkColumn)
+	if err := initializers.DB.Raw(query, rowID).Scan(&data).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Строка не найдена"})
+		return
+	}
+
+	if len(data) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Строка не найдена"})
 		return
 	}
@@ -1103,4 +1117,20 @@ func restoreTableFromZip(tx *gorm.DB, zipFile *zip.File, tableName string) error
 	}
 
 	return nil
+}
+
+func getPrimaryKeyColumn(db *gorm.DB, tableName string) (string, error) {
+	var pkColumn string
+	query := `
+        SELECT a.attname AS column_name
+        FROM pg_index i
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indrelid = $1::regclass
+        AND i.indisprimary;
+    `
+	row := db.Raw(query, tableName).Row()
+	if err := row.Scan(&pkColumn); err != nil {
+		return "", fmt.Errorf("не удалось определить первичный ключ: %v", err)
+	}
+	return pkColumn, nil
 }
